@@ -78,9 +78,23 @@ for (i in 4:ncol(df1)){
   } #We consider that the 3 min gap is the time the meters and submeters need for software updates.
 
   # For all the others
-for (i in 4:ncol(df1)) {
-  df1[which(is.na(df1[ ,i]) == TRUE), i] <- getmode(df1[ ,i])
+df1$year <- year(df1$DateTime)
+df1$weekday <- weekdays.POSIXt(df1$DateTime)
+
+y <- colnames(df1[1:(ncol(df1)-2)])
+for (i in 1:nrow(df1)) {
+  for (j in 1:(ncol(df1)-2)) {
+    for (k in y){
+      x <- df1%>%dplyr::filter(month == c(df1[i,ncol(df1)-1])) %>% 
+        dplyr::group_by(weekday) %>% dplyr::summarise(Mode(k[j]))
+    }
+  }
+  
+  df1[which(is.na(df1[i, ]) == TRUE)]
 }
+
+x <- df1%>%dplyr::filter(month == c(df1[1,ncol(df1)-1])) %>% 
+  dplyr::group_by(weekday) %>% dplyr::summarise(Mode(y[1]))
 
 # Create attributes from "DateTime" ----
 
