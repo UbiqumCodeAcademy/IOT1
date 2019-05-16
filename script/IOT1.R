@@ -1,7 +1,8 @@
 # Settings -----
 pacman::p_load(chrone, dplyr, plyr, RMySQL, lubridate, ggplot2, reshape2, 
                quantmod, scales, RColorBrewer, sqldf, ggfortify, tidyr, 
-               compareDF, reshape, rstudioapi, stringi, plotly)
+               compareDF, reshape, rstudioapi, stringi, plotly, padr, 
+               DescTools)
 
 current_path <- getActiveDocumentContext()$path
 setwd(dirname(dirname(current_path)))
@@ -12,12 +13,12 @@ con = dbConnect(MySQL(), user='deepAnalytics', password='Sqltask1234!',
                 dbname='dataanalytics2018', 
                 host='data-analytics-2018.cbrosir2cswx.us-east-1.rds.amazonaws.com')
 
- ## Data ser INFORMATION -----
-# sub_metering_1: energy sub-metering No. 1 (in watt-hour of active energy). It corresponds to the kitchen, containing mainly a dishwasher, an oven and a microwave (hot plates are not electric but gas powered). 
-# sub_metering_2: energy sub-metering No. 2 (in watt-hour of active energy). It corresponds to the laundry room, containing a washing-machine, a tumble-drier, a refrigerator and a light. 
-# sub_metering_3: energy sub-metering No. 3 (in watt-hour of active energy). It corresponds to an electric water-heater and an air-conditioner.
+# Data set INFORMATION -----
+ ## sub_metering_1: energy sub-metering No. 1 (in watt-hour of active energy). It corresponds to the kitchen, containing mainly a dishwasher, an oven and a microwave (hot plates are not electric but gas powered). 
+ ## sub_metering_2: energy sub-metering No. 2 (in watt-hour of active energy). It corresponds to the laundry room, containing a washing-machine, a tumble-drier, a refrigerator and a light. 
+ ## sub_metering_3: energy sub-metering No. 3 (in watt-hour of active energy). It corresponds to an electric water-heater and an air-conditioner.
 
-## Load data-----
+# Load data-----
 j <- c("yr_2006", "yr_2007", "yr_2008", "yr_2009", "yr_2010") # Should it be only from 2007 to 2009?
 df <- c()
 for (i in 1:length(j)) {
@@ -44,21 +45,62 @@ attr(df$DateTime, "tzone") <- "Europe"
 
 df <- df %>% mutate(Total_Power = Global_active_power + Global_reactive_power)
 summary(df$Total_Power) # Because the highest "Total Power" is 11.3 kW/h, the power hiredmust be up to 12 kVA
+  # Only 0.65 % of the time the total power needed is higher than 5.5 kVA. By hiring 6kVA, customer will reduce the power bill up to 50€ a year.
+summary(df$Global_intensity)
+summary(df$Voltage) # Voltage is a bit higher than expected, as the standard voltage in France is 230V
 
-## Create attributes from "DateTime" ----
+df$year <- year(df$DateTime) # To filter in or out the years
 
-df$year <- year(df$DateTime)
-df$month <- month(df$DateTime)
-df$day <- day(df$DateTime)
-df$weekday <- weekdays.POSIXt(df$DateTime)
-df$week <- week(df$DateTime)
-df$hour <- hour(df$DateTime)
-df$minute <- minute(df$DateTime)
-df$quarter <- quarter(df$DateTime)
-df$Time2 <- as.numeric(hms(df$Time))
-df$yearmonth <- as.yearmon(df$DateTime)
+# check if there are any time gap----
+df$gap <- c(NA, with(df, DateTime[-1] - DateTime[-nrow(df)]))
 
-#Power Fares----
+which(df$gap > 1)
+
+x1 <- df[(c((which(df$gap > 3)-1),(which(df$gap > 3)))),1]
+x1 <- as.data.frame(x1)
+
+rm(x1)
+df$gap <- NULL
+
+# PAD function (package PADR) to "fill the gaps" with NAs----
+df1 <- rbind(df %>% filter(year == 2007) %>% 
+               pad(), df %>% filter(year == 2008) %>% 
+               pad(), df %>% filter(year == 2009) %>% 
+               pad(), df %>% filter(year == 2010) %>%
+               pad())
+
+df1$year <- NULL
+
+# Fill NAs with data ----
+  # For the ones that are less than three minutes:
+for (i in 4:ncol(df1)){
+  df1[ ,i] <- na.locf(df1[ ,i], maxgap = 3)
+  } #We consider that the 3 min gap is the time the meters and submeters need for software updates.
+
+  # For all the others
+for (i in 4:ncol(df1)) {
+  df1[which(is.na(df1[ ,i]) == TRUE), i] <- getmode(df1[ ,i])
+}
+
+# Create attributes from "DateTime" ----
+
+df1$Date <- date(df1$DateTime)
+df1$year <- year(df1$DateTime)
+df1$month <- month(df1$DateTime)
+df1$day <- day(df1$DateTime)
+df1$weekday <- weekdays.POSIXt(df1$DateTime)
+df1$week <- week(df1$DateTime)
+df1$hour <- hour(df1$DateTime)
+df1$minute <- minute(df1$DateTime)
+df1$quarter <- quarter(df1$DateTime)
+df1$Time2 <- as.numeric(hms(df1$Time))
+df1$yearmonth <- as.yearmon(df1$DateTime)
+
+# z <- zoo(1:nrow(df1), as.POSIXct(c(df1$DateTime)))
+# g <- seq(start(z), end(z), by = "min")
+# na.locf(z, xout = g)
+
+## Power Fares----
 # Off-peak time is between 02:00 and 07:00; and between 14:00 and 17:00
 # Off-peak price per kWh is 0,1230 €
 # Peak time is between 17:00 and 02:00; and between 07:00 and 14:00
@@ -66,12 +108,13 @@ df$yearmonth <- as.yearmon(df$DateTime)
 normal_fare <- read.csv("dataset/NormalFares.csv")
 peak_fare <- read.csv("dataset/PeakFares.csv")
 
-# Creating a new variable for "Peak" consumes ----
-x <- as.numeric(hms(c("07:00:00", "10:00:00", "17:00:00", "22:00:00")))
+## Creating a new variable for "Peak" consumes ----
+x <- as.numeric(hms(c("02:00:00", "07:00:00", "14:00:00", "17:00:00")))
 
-df$tariff <- ifelse(df$Time2 > x[1] & df$Time2 < x[2] | df$Time2 > x[3] & 
-                      df$Time2 < x[4], "valey", "peak")
+df1$tariff <- ifelse(df1$Time2 > x[1] & df1$Time2 < x[2] | df1$Time2 > x[3] & 
+                      df1$Time2 < x[4], "valey", "peak")
 rm(x)
+
 # Time Series plotting by day ----
 df2 <- df %>% filter(year > 2006) %>% group_by(Date, Time) %>% 
   summarise(x = sum(Global_active_power/60))
@@ -225,35 +268,29 @@ ggplot(df8, aes(x = monthf, group = 1)) +
   geom_line(aes(y = laundry_energy), color = "#2E7D32") + 
   ylab("Energy (kW/h)") + xlab("Month") + ggtitle("Energy consumed per submeter")
 
- # By time of the day ----
-df9 <- df %>% group_by(DateTime) %>% 
+# Plotting for a representative day ----
+df9 <- df %>% group_by(DateTime, weekday) %>% 
   summarise(kitchen_energy = sum(kitchen/1000), laundry_energy = sum(laundry/1000), 
             conditioning_energy = sum(conditioning/1000), 
             Global_Energy = sum(Global_active_power/60))
 
 df9$hour <- hour(df9$DateTime)
-df9$Energy_no_submetered <- (df9$Global_Energy - df9$kitchen_energy - 
-                               df9$laundry_energy - df9$conditioning_energy)
 df9$day <- day(df9$DateTime)
 
 df9 <- df9 %>% group_by(day, hour) %>% 
   summarise(kitchen_energy = round(sum(kitchen_energy),0), 
             laundry_energy = round(sum(laundry_energy),0), 
             conditioning_energy = round(sum(conditioning_energy),0), 
-            Global_Energy = round(sum(Global_Energy),0), 
-            Energy_no_submetered = round(sum(Energy_no_submetered),0))
-
-getmode <- function(v) {
-  uniqv <- unique(v)
-  uniqv[which.max(tabulate(match(v, uniqv)))]
-}
+            Global_Energy = round(sum(Global_Energy),0))
 
 df9 <- df9 %>% group_by(hour) %>% 
   summarise(kitchen_energy = getmode(kitchen_energy), 
             laundry_energy = getmode(laundry_energy), 
             conditioning_energy = getmode(conditioning_energy), 
-            Global_Energy = getmode(Global_Energy), 
-            Energy_no_submetered = getmode(Energy_no_submetered))
+            Global_Energy = getmode(Global_Energy))
+
+df9$Energy_no_submetered <- (df9$Global_Energy - df9$kitchen_energy - 
+                               df9$laundry_energy - df9$conditioning_energy)
 
 df9$Hour <- factor(df9$hour, levels = as.character(0:23), 
                    labels = c("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", 
@@ -272,30 +309,5 @@ plot_ly(df9, x = df9$Hour, y = df9$kitchen_energy, name = "Kitchen",
   layout(title = "Representative day of Energy consumed per submeter",
          xaxis = list(title = "Time"), yaxis = list(title = "Energy (kW/h)"))
 
-# check if there are any time gap ----
-df$gap <- c(NA, with(df, hour[-1] - hour[-nrow(df)]))
 
-which(df$gap > 1)
-
-x1 <- df[(c((which(df$gap > 1)-1),(which(df$gap > 1)))),1]
-x1 <- as.data.frame(x1)
-
-rm(x1)
-
-df$gap <- NULL
-
-# check if there are any time gap ----
-df$gap <- c(NA, with(df, minute[-1] - minute[-nrow(df)]))
-
-which(df$gap > 1)
-
-df$gap <- NULL
-
- #Power Fares----
-# Off-peak time is between 08:00 and 12:00; and between 17:00 and 20:00
-# Off-peak price per kWh is 0,1244 €
-# Peak time is between 20:00 and 08:00; and between 12:00 and 17:00
-# Peak Price per kWh is 0,1593
-normal_fare <- read.csv("dataset/NormalFares.csv")
-peak_fare <- read.csv("dataset/PeakFares.csv")
 
