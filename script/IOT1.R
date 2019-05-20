@@ -1,8 +1,8 @@
 # Settings -----
-pacman::p_load(chrone, dplyr, plyr, RMySQL, lubridate, ggplot2, reshape2, 
+pacman::p_load(chron, dplyr, plyr, RMySQL, lubridate, ggplot2, reshape2, 
                quantmod, scales, RColorBrewer, sqldf, ggfortify, tidyr, 
                compareDF, reshape, rstudioapi, stringi, plotly, padr, 
-               DescTools)
+               DescTools, anytime, ggfortify, forecast, tslm)
 
 current_path <- getActiveDocumentContext()$path
 setwd(dirname(dirname(current_path)))
@@ -79,7 +79,7 @@ for (i in 4:ncol(df1)){
 
   # For all the others
 for (i in 4:ncol(df1)) {
-  df1[which(is.na(df1[ ,i]) == TRUE), i] <- getmode(df1[ ,i])
+  df1[which(is.na(df1[ ,i]) == TRUE), i] <- Mode(df1[ ,i])
 }
 
 # Create attributes from "DateTime" ----
@@ -93,6 +93,7 @@ df1$week <- week(df1$DateTime)
 df1$hour <- hour(df1$DateTime)
 df1$minute <- minute(df1$DateTime)
 df1$quarter <- quarter(df1$DateTime)
+df1$Time <- strftime(df1$DateTime,format="%H:%M:%S")
 df1$Time2 <- as.numeric(hms(df1$Time))
 df1$yearmonth <- as.yearmon(df1$DateTime)
 
@@ -115,8 +116,8 @@ df1$tariff <- ifelse(df1$Time2 > x[1] & df1$Time2 < x[2] | df1$Time2 > x[3] &
                       df1$Time2 < x[4], "valey", "peak")
 rm(x)
 
-# Time Series plotting by day ----
-df2 <- df %>% filter(year > 2006) %>% group_by(Date, Time) %>% 
+# Splitting the data by day ----
+df2 <- df1 %>% filter(year > 2006) %>% group_by(Date, Time) %>% 
   summarise(x = sum(Global_active_power/60))
 df2 <- df2 %>% group_by(Date) %>% summarise(Energy = sum(x))
 df2$year <- year(df2$Date)
@@ -142,6 +143,28 @@ ggplot(df2, aes(monthweek, weekdayf, fill = Energy)) +
   ggtitle("Total Power Consume") + xlab("Week of Month") + ylab("") + 
   theme_bw()
 
+ #Converting it to a Time Series
+df2ts <- ts(df2$Energy, frequency = 365, start = c(2007,1))
+
+autoplot(df2ts)
+ ## Applying time series linear regression to the Time series:
+
+fit_df2 <- tslm(df2ts ~ trend + season)
+summary(fit_df2)
+plot(forecast(fit_df2, h=5))
+
+## Decomposing the Time series:
+decomposed_df2ts <- decompose(df2ts)
+plot(decomposed_df2ts)
+summary(decomposed_df2ts)
+decomposed_df2ts$random
+
+x <- stl(df2ts, "periodic")
+seasonal_stl_df2ts <- x$time.series[,1]
+trend_stl_df2ts <- x$time.series[,2]
+random_stl_df2ts <- x$time.series[,3]
+y <- (sum(abs(x$time.series[,3])))/nrow(df2) # Absolute Mean Error
+
 # Now by month ----
 df3 <- df2 %>% group_by(yearmonth) %>% summarise(Energy = sum(Energy))
 df3$year <- year(df3$yearmonth)
@@ -160,8 +183,44 @@ ggplot(df3, aes(x = monthf, y = Energy, colour = Year, group = Year)) +
   geom_line() + ylab("Energy (kW/h)") + xlab("Month") +
   ggtitle("Energy consume per month") + geom_point() 
 
+ #Converting it to a Time Series
+df3ts <- ts(df3$Energy, frequency = 12, start = c(2007,1))
+
+plot.ts(df3ts)
+autoplot(df3ts)
+
+## Applying time series linear regression to the Time series:
+
+fit_df3 <- tslm(df3ts ~ trend + season)
+summary(fit_df3)
+plot(forecast(fit_df3, h=5, level=c(80,90)))
+
+## Decomposing the Time series:
+decomposed_df3ts <- decompose(df3ts)
+plot(decomposed_df3ts)
+summary(decomposed_df3ts)
+decomposed_df3ts$random
+
+x <- stl(df3ts, "periodic")
+seasonal_stl_df3ts <- x$time.series[,1]
+trend_stl_df3ts <- x$time.series[,2]
+random_stl_df3ts <- x$time.series[,3]
+y <- (sum(abs(x$time.series[,3])))/nrow(df3) # Absolute Mean Error
+
+## Applying Holt-Winters to the Time series:
+adjusted_df3ts <- df3ts - decomposed_df3ts$seasonal
+autoplot(adjusted_df3ts)
+plot(decompose(adjusted_df3ts))
+
+df3ts_HW <- HoltWinters(adjusted_df3ts, beta=FALSE, gamma=FALSE)
+plot(df3ts_HW, ylim = c(575, 950))
+
+ ## Forecast Holt-Winters:
+df3ts_HW_forecast<- forecast(df3ts_HW, h=5)
+plot(df3ts_HW_forecast)
+
 # Now by month and tariff ----
-df4 <- df %>% group_by(Date, hour, tariff) %>% summarise(sum_total_power = 
+df4 <- df1 %>% group_by(Date, hour, tariff) %>% summarise(sum_total_power = 
                                                      sum(Global_active_power/60))
 df4$yearmonth <- as.yearmon(df4$Date)
 df4$PeakPower <- ifelse(df4$tariff == "peak", (df4$sum_total_power), 0)
@@ -180,7 +239,7 @@ ggplot(df4, aes(x = yearmonth, y = Monthly_fare)) +
   geom_line(color = "#01EC13", size = 1) + ylab("Euros") +
   xlab("") + ggtitle("Peak/Valey tariff monthly fares")
 
-df5 <- df %>% group_by(yearmonth) %>% summarise(sum_total_power = 
+df5 <- df1 %>% group_by(yearmonth) %>% summarise(sum_total_power = 
                                                   sum(Global_active_power/60))
 head(df5)
 df5$Monthly_fare <- df5$sum_total_power * normal_fare$Price._per_kWh[4] + 
@@ -211,6 +270,13 @@ ggplot(data = df6, aes(x = yearmonth, y = Monthly_fare)) +
 ggplot(df6, aes(x = yearmonth, y = Monthly_fare, colour = Tariff)) +
   geom_line() + ylab("Monthly bill (€)") + xlab("Year")
 
+#Converting it to a Time Series
+df4ts <- ts(df4$Monthly_fare, frequency = 12, start = c(2007,1))
+df5ts <- ts(df5$Monthly_fare, frequency = 12, start = c(2007,1))
+
+plot.ts(df3ts)
+autoplot(df4ts)
+
 df7 <- as.data.frame(cbind(df4,df5))
 df7[ ,c(3, 4, 6, 8, 9, 10)] <- NULL
 colnames(df7) <- c("yearmonth", "Monthly_fare", "Tariff", "Normal_Monthly_fare")
@@ -223,7 +289,7 @@ df8$ratio <- round((df8$Normal_Monthly_fare/df8$Normal_Monthly_fare)*100,2)
 df8 <- df8[ ,c(1, 2, 4, 3, 5)]
 
 df9 <- as.data.frame(rbind(df7,df8))
-rm(df7, df8)
+rm(df4, df5, df7, df8)
 df9$Monthly_fare <- NULL
 df9$Normal_Monthly_fare <- NULL
 ggplot(df9, aes(x = yearmonth, y = ratio, colour = Tariff)) +
@@ -269,7 +335,7 @@ ggplot(df8, aes(x = monthf, group = 1)) +
   ylab("Energy (kW/h)") + xlab("Month") + ggtitle("Energy consumed per submeter")
 
 # Plotting for a representative day ----
-df9 <- df %>% group_by(DateTime, weekday) %>% 
+df9 <- df1 %>% group_by(DateTime, weekday) %>% 
   summarise(kitchen_energy = sum(kitchen/1000), laundry_energy = sum(laundry/1000), 
             conditioning_energy = sum(conditioning/1000), 
             Global_Energy = sum(Global_active_power/60))
@@ -310,4 +376,95 @@ plot_ly(df9, x = df9$Hour, y = df9$kitchen_energy, name = "Kitchen",
          xaxis = list(title = "Time"), yaxis = list(title = "Energy (kW/h)"))
 
 
+
+
+# Data splitting ----
+trainSet <- window(df3ts, 2007, c(2009,12))
+df3fit1 <- meanf(trainSet,h=12)
+df3fit2 <- rwf(trainSet,h=12)
+df3fit3 <- snaive(trainSet,h=12)
+
+testSet <- window(df3ts, 2010)
+accuracy(df3fit1, testSet)
+accuracy(df3fit2, testSet)
+accuracy(df3fit3, testSet)
+
+autoplot(window(df3ts, start=2007)) +
+  autolayer(df3fit1, series="Mean", PI=FALSE) +
+  autolayer(df3fit2, series="Naïve", PI=FALSE) +
+  autolayer(df3fit3, series="Seasonal naïve", PI=FALSE) +
+  xlab("Year") + ylab("Energy (kW/h)") +
+  ggtitle("Forecasts for monthly power consume") +
+  guides(colour=guide_legend(title="Forecast"))
+
+trainSet <- window(df2ts, 2007, c(2010,300))
+df2fit1 <- meanf(trainSet,h=65)
+df2fit2 <- rwf(trainSet,h=65)
+df2fit3 <- snaive(trainSet,h=65)
+
+testSet <- window(df2ts, c(2010,300))
+accuracy(df2fit1, testSet)
+accuracy(df2fit2, testSet)
+accuracy(df2fit3, testSet)
+
+autoplot(window(df2ts, start = c(2009,300))) +
+  autolayer(df2fit1, series="Mean", PI=FALSE) +
+  autolayer(df2fit2, series="Naïve", PI=FALSE) +
+  autolayer(df2fit3, series="Seasonal naïve", PI=FALSE) +
+  xlab("Year") + ylab("Energy (kW/h)") +
+  ggtitle("Forecasts for monthly power consume") +
+  guides(colour=guide_legend(title="Forecast"))
+
+# IDEA ----
+
+df4 <- df1 %>% filter(year > 2006) %>% group_by(Date, Time, hour, month, year) %>% 
+  summarise(x = sum(Global_active_power/60))
+df4 <- df4 %>% group_by(Date, hour, month, year) %>% summarise(x = sum(x))
+df4 <- df4 %>% group_by(year, month, hour) %>% summarise(GAP_mean = mean(x))
+df4ts <- ts(df4$GAP_mean, frequency = 24*12, start = c(2007,1))
+autoplot(df4ts)
+
+df4ts_forecast<- forecast(df4ts, h=24)
+plot(df4ts_forecast)
+
+trainSet <- window(df4ts, 2007, c(2010,24*9))
+df4fit1 <- meanf(trainSet,h=240)
+df4fit2 <- rwf(trainSet,h=240)
+df4fit3 <- snaive(trainSet,h=240)
+
+testSet <- window(df4ts, c(2010,24*9))
+accuracy(df4fit1, testSet)
+accuracy(df4fit2, testSet)
+accuracy(df4fit3, testSet)
+
+# IDEA 2----
+
+df5 <- df1 %>% filter(year > 2006) %>% group_by(Date, Time, hour, quarter, year) %>% 
+  summarise(x = sum(Global_active_power/60))
+df5 <- df5 %>% group_by(Date, hour, quarter, year) %>% summarise(x = sum(x))
+df5 <- df5 %>% group_by(year, quarter, hour) %>% summarise(GAP_mean = mean(x))
+df5ts <- ts(df5$GAP_mean, frequency = 24*4, start = c(2007,1))
+autoplot(df5ts)
+
+df5ts_forecast<- forecast(df5ts, h=24)
+plot(df5ts_forecast)
+
+trainSet <- window(df5ts, 2007, c(2009,48))
+df5fit1 <- meanf(trainSet,h=48)
+df5fit2 <- rwf(trainSet,h=48)
+df5fit3 <- snaive(trainSet,h=48)
+
+testSet <- window(df5ts, c(2009,48))
+accuracy(df5fit1, testSet)
+accuracy(df5fit2, testSet)
+accuracy(df5fit3, testSet)
+
+e <- tsCV(df3ts, rwf, drift=TRUE, h=1)
+e2 <- tsCV(df3ts, snaive, drift=TRUE, h=1)
+
+sqrt(mean(e^2, na.rm=TRUE))
+sqrt(mean(e2^2, na.rm=TRUE))
+
+sqrt(mean(residuals(rwf(df3ts, drift=TRUE))^2, na.rm=TRUE))
+sqrt(mean(residuals(snaive(df3ts, drift=TRUE))^2, na.rm=TRUE))
 
