@@ -153,6 +153,9 @@ fit_df2 <- tslm(df2ts ~ trend + season)
 summary(fit_df2)
 plot(forecast(fit_df2, h=5))
 
+checkresiduals(fit_df2)
+CV(fit_df2) # Horrible!
+
 ## Decomposing the Time series:
 decomposed_df2ts <- decompose(df2ts)
 plot(decomposed_df2ts)
@@ -194,6 +197,9 @@ autoplot(df3ts)
 fit_df3 <- tslm(df3ts ~ trend + season)
 summary(fit_df3)
 plot(forecast(fit_df3, h=5, level=c(80,90)))
+
+checkresiduals(fit_df3)
+CV(fit_df3)
 
 ## Decomposing the Time series:
 decomposed_df3ts <- decompose(df3ts)
@@ -389,6 +395,14 @@ accuracy(df3fit1, testSet)
 accuracy(df3fit2, testSet)
 accuracy(df3fit3, testSet)
 
+gglagplot(df3ts) # The relationship is strongly positive at lag 12, reflecting the strong seasonality in the data.
+ggAcf(df3ts, lag=24)
+ggsubseriesplot(df3ts)
+ggseasonplot(df3ts, year.labels=TRUE, year.labels.left=TRUE) +
+  ylab("Power consumed (kW/h)") +
+  ggtitle("Seasonal plot: Monthly power consume")
+
+
 autoplot(window(df3ts, start=2007)) +
   autolayer(df3fit1, series="Mean", PI=FALSE) +
   autolayer(df3fit2, series="Naïve", PI=FALSE) +
@@ -467,4 +481,5 @@ sqrt(mean(e2^2, na.rm=TRUE))
 
 sqrt(mean(residuals(rwf(df3ts, drift=TRUE))^2, na.rm=TRUE))
 sqrt(mean(residuals(snaive(df3ts, drift=TRUE))^2, na.rm=TRUE))
+
 
