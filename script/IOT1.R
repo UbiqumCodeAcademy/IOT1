@@ -1,3 +1,8 @@
+# General comments
+
+# take care with variable names
+#
+
 # Settings -----
 pacman::p_load(chron, dplyr, plyr, RMySQL, lubridate, ggplot2, reshape2, 
                quantmod, scales, RColorBrewer, sqldf, ggfortify, tidyr, 
